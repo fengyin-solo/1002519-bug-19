@@ -12,8 +12,8 @@ router = APIRouter(prefix="/api/axlecounter", tags=["计轴设备"])
 
 service = AxlecounterService()
 
-LIST_FIELDS = ["计轴器编号", "所属区间", "检测磁头", "轮轴脉冲", "计数偏差", "复位状态", "校核记录", "计轴状态"]
-STATUSES = ["正常", "计数偏差", "磁头故障", "已停用"]
+LIST_FIELDS = ["计轴器编号", "所属区间", "检测磁头", "轮轴脉冲", "磁头读数", "计数偏差", "复位状态", "校核记录", "计轴状态"]
+STATUSES = ["正常", "计数偏差", "磁头故障", "数据中断", "已停用"]
 
 
 @router.get("", response_model=PageResult[dict])
@@ -50,12 +50,16 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
-    """对单条计轴器执行登记偏差、校核复位、办理停用；不允许的动作会被拦下并说明原因。"""
+    """对单条计轴器执行登记偏差、校核复位、办理停用。
+
+    动作被规则拦下（如数据中断时复位）时 ok=False：计轴状态回到/保持在原状态，
+    偏差记录不丢，复位历史只追加一条失败审计，前端可直接重试。
+    """
     action = str(payload.values.get("action") or "").strip()
-    entry, message = service.run_action(entry_id, action)
+    entry, message, changed = service.run_action(entry_id, action, payload.values)
     if entry is None:
         return ActionResult(ok=False, message=message)
-    return ActionResult(ok=True, message=message, entry=entry)
+    return ActionResult(ok=changed, message=message, entry=entry)
 
 
 @router.get("/export")
