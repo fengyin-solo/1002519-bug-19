@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/axlecounter", tags=["计轴设备"])
 
 service = AxlecounterService()
 
-LIST_FIELDS = ["计轴器编号", "所属区间", "检测磁头", "轮轴脉冲", "计数偏差", "复位状态", "校核记录", "计轴状态"]
+LIST_FIELDS = ["计轴器编号", "所属区间", "检测磁头", "轮轴脉冲", "磁头读数", "计数偏差", "复位状态", "校核记录", "计轴状态"]
 STATUSES = ["正常", "计数偏差", "磁头故障", "已停用"]
 
 
@@ -28,6 +28,13 @@ def list_entries(
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
     items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
     return PageResult(items=items, total=total, page=page, size=size)
+
+
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出计轴设备清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "axlecounter", "total": total, "items": items}
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -50,16 +57,23 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
-    """对单条计轴器执行登记偏差、校核复位、办理停用；不允许的动作会被拦下并说明原因。"""
+    """对单条计轴器执行登记偏差、校核复位、办理停用；不允许的动作会被拦下并说明原因。
+
+    校核复位遇到采集中断/读数陈旧时返回 ok=False：计轴状态维持复位前，
+    偏差记录保留，复位历史追加一条失败记录，前端可直接重试。
+    """
     action = str(payload.values.get("action") or "").strip()
-    entry, message = service.run_action(entry_id, action)
+    entry, message, ok = service.run_action(entry_id, action)
     if entry is None:
         return ActionResult(ok=False, message=message)
-    return ActionResult(ok=True, message=message, entry=entry)
+    return ActionResult(ok=ok, message=message, entry=entry)
 
 
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出计轴设备清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "axlecounter", "total": total, "items": items}
+@router.post("/{entry_id}/simulate", response_model=ActionResult)
+def simulate(entry_id: int, payload: EntryPayload) -> ActionResult:
+    """切换采集链路场景：interrupt（中断）、stale（陈旧）、recover（恢复）。"""
+    scenario = str(payload.values.get("scenario") or "").strip()
+    entry, message, ok = service.simulate(entry_id, scenario)
+    if entry is None:
+        return ActionResult(ok=False, message=message)
+    return ActionResult(ok=ok, message=message, entry=entry)
